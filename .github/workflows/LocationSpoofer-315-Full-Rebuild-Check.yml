@@ -1,0 +1,104 @@
+name: LocationSpoofer 3.0.15 full Smali and rebuild check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-rebuild:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Download official v3.0.15 APK and pin SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p work tools output/logs
+          curl -fLsS --retry 4 --retry-delay 3 \
+            'https://github.com/HuangZhuoRui/LocationSpoofer/releases/download/v3.0.15/LocationSpoofer-v3.0.15-global-64bit-arm64-v8a.apk' \
+            -o work/original.apk
+          echo 'c2d06ab8164b57f11af2c8a5fc2c0e2312540305529529bfd95c4877dfb0105b  work/original.apk' | sha256sum -c -
+          unzip -t work/original.apk > output/logs/original-integrity.txt
+          unzip -p work/original.apk 'lib/arm64-v8a/liblocation_accel.so' | sha256sum > output/logs/original-sensor.sha256
+          unzip -p work/original.apk 'lib/arm64-v8a/libmaplibre.so' | sha256sum > output/logs/original-maplibre.sha256
+
+      - name: Get pinned Apktool
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fLsS --retry 4 --retry-delay 3 \
+            'https://github.com/iBotPeaches/Apktool/releases/download/v2.12.1/apktool_2.12.1.jar' \
+            -o tools/apktool.jar
+          java -jar tools/apktool.jar --version > output/logs/apktool-version.txt
+
+      - name: Decode complete editable Smali and resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          java -Xmx4g -jar tools/apktool.jar d -f work/original.apk -o work/decoded > output/logs/decode.log 2>&1
+          test -f work/decoded/apktool.yml
+          test -f work/decoded/AndroidManifest.xml
+          test -f work/decoded/smali/er2.smali
+          test -f work/decoded/smali/com/vincenthzr/locationspoofer/xposed/utils/SensorPressurePolicy.smali
+          find work/decoded -name '*.smali' | wc -l > output/logs/smali-files.txt
+          find work/decoded -type f | wc -l > output/logs/all-files.txt
+
+      - name: Rebuild unchanged decompiled APK (unsigned)
+        shell: bash
+        run: |
+          set +e
+          java -Xmx4g -jar tools/apktool.jar b work/decoded -o work/rebuilt-unsigned.apk > output/logs/rebuild.log 2>&1
+          status=$?
+          set -e
+          echo "apktool_rebuild_exit=$status" | tee output/logs/result.txt
+          if [ "$status" -eq 0 ] && [ -f work/rebuilt-unsigned.apk ]; then
+            unzip -t work/rebuilt-unsigned.apk > output/logs/rebuilt-integrity.txt
+            unzip -p work/rebuilt-unsigned.apk 'lib/arm64-v8a/liblocation_accel.so' | sha256sum > output/logs/rebuilt-sensor.sha256
+            unzip -p work/rebuilt-unsigned.apk 'lib/arm64-v8a/libmaplibre.so' | sha256sum > output/logs/rebuilt-maplibre.sha256
+            cmp output/logs/original-sensor.sha256 output/logs/rebuilt-sensor.sha256 \
+              && echo 'sensor_lib_unchanged=yes' >> output/logs/result.txt \
+              || echo 'sensor_lib_unchanged=no' >> output/logs/result.txt
+            cmp output/logs/original-maplibre.sha256 output/logs/rebuilt-maplibre.sha256 \
+              && echo 'maplibre_lib_unchanged=yes' >> output/logs/result.txt \
+              || echo 'maplibre_lib_unchanged=no' >> output/logs/result.txt
+          else
+            echo 'rebuild_failed_see_logs=yes' >> output/logs/result.txt
+          fi
+          # The workflow always saves diagnostics, even if the unsigned rebuild fails.
+          exit 0
+
+      - name: Package full editable tree and metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd work
+          zip -q -r ../output/locationspoofer-315-full-apktool.zip decoded
+          cd ..
+          if [ -f work/rebuilt-unsigned.apk ]; then
+            cp work/rebuilt-unsigned.apk output/rebuilt-UNSIGNED-not-installable.apk
+          fi
+          cat > output/README.txt <<'TXT'
+          This artifact is an EDITABLE ANALYSIS AND REBUILD TEST, not a modified app.
+          locationspoofer-315-full-apktool.zip contains ALL Smali files and decoded Android resources.
+          rebuilt-UNSIGNED-not-installable.apk is unsigned, do not try to install it.
+          Check logs/result.txt and logs/rebuild.log. Neither successful rebuild nor native library integrity proves runtime behavior.
+          Source release APK is pinned by official SHA256. Keep all sensor/Xposed native libraries unchanged in further edits.
+          TXT
+          du -sh output/* || true
+
+      - name: Upload full editable project and rebuild diagnostics
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: locationspoofer-315-full-rebuild-check
+          path: output/
+          retention-days: 7
+          if-no-files-found: warn

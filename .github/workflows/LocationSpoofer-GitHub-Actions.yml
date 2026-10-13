@@ -35,7 +35,8 @@ jobs:
           set +o pipefail
           yes | sdkmanager --licenses
           set -o pipefail
-          sdkmanager "platforms;android-37" "build-tools;37.0.0"
+          sdkmanager "platforms;android-37.0" "build-tools;37.0.0"
+          ln -sfn "$ANDROID_SDK_ROOT/platforms/android-37.0" "$ANDROID_SDK_ROOT/platforms/android-37"
       - name: Restore debug signing certificate cache
         uses: actions/cache@v4
         with:

@@ -1,0 +1,122 @@
+name: Analyze official LocationSpoofer 3.0.15 (JADX and Smali)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reverse-engineer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Download and verify the original release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p work logs output
+          URL='https://github.com/HuangZhuoRui/LocationSpoofer/releases/download/v3.0.15/LocationSpoofer-v3.0.15-global-64bit-arm64-v8a.apk'
+          curl -fLsS --retry 4 --retry-delay 3 "$URL" -o work/original.apk
+          echo 'c2d06ab8164b57f11af2c8a5fc2c0e2312540305529529bfd95c4877dfb0105b  work/original.apk' | sha256sum --check
+          unzip -t work/original.apk > logs/original-apk-integrity.txt
+          unzip -l work/original.apk | grep -E '(classes\.dex|liblocation_accel\.so|libmaplibre\.so)' >> logs/original-apk-integrity.txt
+
+      - name: Download decompilers
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p tools
+          # Pin known upstream tool releases so a new 'latest' does not silently change behavior.
+          curl -fLsS --retry 4 --retry-delay 3 \
+            https://github.com/skylot/jadx/releases/download/v1.5.5/jadx-1.5.5.zip -o tools/jadx.zip
+          unzip -q tools/jadx.zip -d tools/jadx
+          chmod +x tools/jadx/bin/jadx
+          curl -fLsS --retry 4 --retry-delay 3 \
+            https://github.com/iBotPeaches/Apktool/releases/download/v2.12.1/apktool_2.12.1.jar -o tools/apktool.jar
+          tools/jadx/bin/jadx --version
+          java -jar tools/apktool.jar --version
+
+      - name: Decompile to Java using JADX
+        shell: bash
+        run: |
+          mkdir -p logs
+          set +e
+          tools/jadx/bin/jadx --no-res --threads-count 2 --show-bad-code -d work/jadx work/original.apk > logs/jadx.log 2>&1
+          echo "JADX exit: $?" >> logs/jadx.log
+          exit 0
+
+      - name: Recover editable Smali and resources using Apktool
+        shell: bash
+        run: |
+          mkdir -p logs
+          set +e
+          java -Xmx3g -jar tools/apktool.jar d -f work/original.apk -o work/apktool > logs/apktool.log 2>&1
+          RESULT=$?
+          echo "APKTOOL full decode exit: $RESULT" >> logs/apktool.log
+          if [ "$RESULT" -ne 0 ]; then
+            rm -rf work/apktool
+            java -Xmx3g -jar tools/apktool.jar d -f -r work/original.apk -o work/apktool >> logs/apktool.log 2>&1
+            echo "APKTOOL Smali-only decode exit: $?" >> logs/apktool.log
+          fi
+          exit 0
+
+      - name: Collect focused methods and library fingerprints
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p output/java output/smali output/meta
+          # Focus on map view/control, sensor altitude/pressure, local data and authorization.
+          for stem in er2 jr2 tr2 gr2 br2 cr2 dr2 ar2; do
+            while IFS= read -r -d '' f; do
+              cp "$f" "output/java/$(basename "$f")"
+            done < <(find work/jadx/sources -type f -name "${stem}.java" -print0 2>/dev/null || true)
+            while IFS= read -r -d '' f; do
+              cp "$f" "output/smali/$(basename "$f")"
+            done < <(find work/apktool -type f -name "${stem}.smali" -print0 2>/dev/null || true)
+          done
+          for cls in \
+            CloudRepository CloudGeoRepository CloudMapResourceCallFactory \
+            RuntimeAuthorizationManager MotionController LocationRepository \
+            LocalSyncData AccountSyncManager SettingsRepository \
+            SensorPressurePolicy RouteEngine SystemAccelHooker; do
+            while IFS= read -r -d '' f; do
+              cp "$f" "output/java/$(basename "$f")"
+            done < <(find work/jadx/sources -type f -name "${cls}.java" -print0 2>/dev/null || true)
+            while IFS= read -r -d '' f; do
+              cp "$f" "output/smali/$(basename "$f")"
+            done < <(find work/apktool -type f -name "${cls}.smali" -print0 2>/dev/null || true)
+          done
+          if [ -f work/apktool/AndroidManifest.xml ]; then
+            cp work/apktool/AndroidManifest.xml output/meta/AndroidManifest.xml
+          fi
+          if [ -f work/apktool/apktool.yml ]; then
+            cp work/apktool/apktool.yml output/meta/apktool.yml
+          fi
+          unzip -p work/original.apk lib/arm64-v8a/liblocation_accel.so | sha256sum > output/meta/original-pressure-lib.sha256
+          unzip -p work/original.apk lib/arm64-v8a/libmaplibre.so | sha256sum > output/meta/original-maplibre-lib.sha256
+          cp logs/* output/meta/
+          {
+            echo 'Official v3.0.15 analysis (READ ONLY; no APK generated)'
+            echo 'Source APK verified against release build-info.json SHA256.'
+            echo 'Native sensor library hash is included to protect pressure/altitude functionality.'
+            echo 'JADX files:'; find output/java -maxdepth 1 -type f | sort
+            echo 'Smali files:'; find output/smali -maxdepth 1 -type f | sort
+            echo 'Review meta/*.log for decoder errors or missing classes.'
+            echo 'JADX output is approximate Java, not original source.'
+          } > output/README.txt
+          du -sh output || true
+
+      - name: Upload focused analysis files
+        uses: actions/upload-artifact@v4
+        with:
+          name: locationspoofer-315-decompiled-map-and-sensor
+          path: output/
+          retention-days: 7
+          if-no-files-found: error

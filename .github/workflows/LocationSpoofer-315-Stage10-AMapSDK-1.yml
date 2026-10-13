@@ -1,0 +1,266 @@
+name: LocationSpoofer 3.0.15 Stage10 AMap SDK MapView test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-amap-sdk-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK without the interactive license step
+        uses: android-actions/setup-android@v3
+        with:
+          accept-android-sdk-licenses: 'false'
+          packages: ''
+
+      - name: Install Android 35 SDK for small SDK helper project
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +o pipefail
+          yes | sdkmanager --licenses
+          set -o pipefail
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Recover auditable patch source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p patch work output tools
+          cat > patch/source.b64 <<'PAYLOAD'
+          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
+          PAYLOAD
+          base64 -d patch/source.b64 > patch/source.tar.gz
+          tar -xzf patch/source.tar.gz -C patch
+          python3 -m py_compile patch/*.py
+          test -s patch/AMapSandboxActivity.java
+          echo "Patch sources recovered."
+
+      - name: Download verified official APK and Apktool
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fLsS --retry 4 --retry-delay 3 \
+            'https://github.com/HuangZhuoRui/LocationSpoofer/releases/download/v3.0.15/LocationSpoofer-v3.0.15-global-64bit-arm64-v8a.apk' \
+            -o work/original.apk
+          echo 'c2d06ab8164b57f11af2c8a5fc2c0e2312540305529529bfd95c4877dfb0105b  work/original.apk' | sha256sum -c -
+          curl -fLsS --retry 4 --retry-delay 3 \
+            'https://github.com/iBotPeaches/Apktool/releases/download/v2.12.1/apktool_2.12.1.jar' \
+            -o tools/apktool.jar
+          java -Xmx4g -jar tools/apktool.jar d -f work/original.apk -o work/decoded
+
+      - name: Build a standalone real AMap SDK map page
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p work/helper/src/main/java/com/vincenthzr/locationspoofer
+          cat > work/settings.gradle <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
+          rootProject.name = 'AMapStage10Scratch'
+          include ':helper'
+          EOF
+          cat > work/build.gradle <<'EOF'
+          plugins { id 'com.android.application' version '8.7.3' apply false }
+          EOF
+          cat > work/helper/build.gradle <<'EOF'
+          plugins { id 'com.android.application' }
+          android {
+              namespace 'com.vincenthzr.locationspoofer.sandbox'
+              compileSdk 35
+              defaultConfig {
+                  applicationId 'com.vincenthzr.locationspoofer.sandbox'
+                  minSdk 26
+                  targetSdk 28
+              }
+              compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+          }
+          dependencies {
+              implementation 'com.amap.api:3dmap-location-search:11.3.100_loc11.3.000_sea9.8.1'
+          }
+          EOF
+          cat > work/helper/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+            <uses-permission android:name="android.permission.INTERNET"/>
+            <application android:label="AMap SDK Scratch">
+              <activity android:name="com.vincenthzr.locationspoofer.AMapSandboxActivity" android:exported="true"/>
+            </application>
+          </manifest>
+          EOF
+          cp patch/AMapSandboxActivity.java work/helper/src/main/java/com/vincenthzr/locationspoofer/
+          (cd work && gradle :helper:assembleDebug --no-daemon --stacktrace)
+          test -f work/helper/build/outputs/apk/debug/helper-debug.apk
+          echo '=== SDK scratch native libs (if any) ==='
+          unzip -Z1 work/helper/build/outputs/apk/debug/helper-debug.apk | grep '^lib/' || true
+          java -Xmx4g -jar tools/apktool.jar d -f work/helper/build/outputs/apk/debug/helper-debug.apk -o work/helper-decoded
+          find work/helper-decoded -type f -name '*MapView*.smali' | head -20
+
+      - name: Merge experimental AMap map page and existing Stage9 key page
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 patch/apply_stage9.py work/decoded
+          python3 patch/patch_stage10.py work/decoded
+          python3 patch/merge_helper.py work/decoded work/helper-decoded
+          grep -q 'AMapSandboxActivity' work/decoded/AndroidManifest.xml
+          grep -q 'LocalAmapKeyActivity' work/decoded/AndroidManifest.xml
+
+      - name: Rebuild and preserve the original sensor module
+        shell: bash
+        run: |
+          set -euo pipefail
+          java -Xmx5g -jar tools/apktool.jar b work/decoded -o work/unsigned.apk
+          unzip -p work/original.apk lib/arm64-v8a/liblocation_accel.so | sha256sum > work/original-sensor.sha256
+          unzip -p work/unsigned.apk lib/arm64-v8a/liblocation_accel.so | sha256sum > work/rebuilt-sensor.sha256
+          cmp work/original-sensor.sha256 work/rebuilt-sensor.sha256
+          echo 'Preserved original v3.0.15 native sensor module (SHA256 match)' | tee output/checks.txt
+
+      - name: Restore the SAME Stage9 test signing certificate
+        uses: actions/cache@v4
+        with:
+          path: .signing/debug.keystore
+          key: locationspoofer-315-stage9-debug-key-v1
+          lookup-only: false
+
+      - name: Zipalign and sign experimental test APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SIGNER="$(find "$SDK_DIR/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          ALIGN="$(find "$SDK_DIR/build-tools" -type f -name zipalign | sort -V | tail -n 1)"
+          test -x "$SIGNER" && test -x "$ALIGN"
+          if [ ! -s .signing/debug.keystore ]; then
+            echo 'ERROR: The Stage9 signing key was not found in cache. Refusing to change SHA1 silently.' >&2
+            exit 1
+          fi
+          FINGERPRINT=$(keytool -list -keystore .signing/debug.keystore -storepass android -alias androiddebugkey -v | sed -n 's/.*SHA1: //p' | head -n 1)
+          echo "Cached signing key SHA1: $FINGERPRINT"
+          if [[ "$FINGERPRINT" != '26:4D:FA:03:6D:DB:72:8E:8C:6B:91:AF:18:3D:B4:0C:80:50:B9:2D' ]]; then
+            echo 'ERROR: Different SHA1. Do not silently invalidate the registered AMap Key.' >&2
+            exit 1
+          fi
+          "$ALIGN" -f -p 4 work/unsigned.apk work/aligned.apk
+          "$SIGNER" sign --ks .signing/debug.keystore --ks-key-alias androiddebugkey \
+            --ks-pass pass:android --key-pass pass:android \
+            --out output/LocationSpoofer-315-Stage10-AMapSDK-EXPERIMENTAL.apk work/aligned.apk
+          "$SIGNER" verify --verbose --print-certs output/LocationSpoofer-315-Stage10-AMapSDK-EXPERIMENTAL.apk > output/signature-info.txt
+          unzip -t output/LocationSpoofer-315-Stage10-AMapSDK-EXPERIMENTAL.apk >/dev/null
+          cat > output/READ_ME_FIRST.txt <<'EOF'
+          STAGE10 EXPERIMENTAL - not a finished map replacement!
+          This APK keeps the original LocationSpoofer v3.0.15 interface and MapLibre.
+          A NEW SEPARATE launcher named 高德地图 SDK 实验 has been added.
+          It uses a real AMap Android SDK, tries to render the map, and saves an experimental clicked coordinate.
+          Existing Stage9 key page is kept; both pages use the same local SharedPreferences.
+          It does NOT pass clicked coordinates back to the original mock-location controller.
+          It does NOT remove login, subscriptions, or cloud features.
+          Important: first-run privacy consent and online connectivity required.
+          Key binding: use SHA1 in signature-info.txt (expected Stage9 SHA1).
+          Verify Stage9 APK is already installed and back up important data before updating.
+          NO Android device tests have been performed by the workflow.
+          EOF
+
+      - name: Upload experiment and logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: LocationSpoofer-315-Stage10-real-AMapSDK-EXPERIMENTAL
+          path: output/
+          if-no-files-found: warn
+          retention-days: 7

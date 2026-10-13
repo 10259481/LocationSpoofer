@@ -1,0 +1,148 @@
+name: Build LocationSpoofer With AMap Key
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - name: Check out public upstream source
+        uses: actions/checkout@v4
+        with:
+          repository: HuangZhuoRui/LocationSpoofer
+          ref: main
+          path: project
+          persist-credentials: false
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install platform tools
+        run: |
+          sdkmanager "platforms;android-37" "build-tools;37.0.0"
+
+      - name: Restore debug signing certificate cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: ${{ runner.os }}-locationspoofer-amap-v2-debug-certificate-v1
+
+      - name: Apply personal AMap key settings patch
+        working-directory: project
+        run: |
+          python3 - <<'PY'
+          import base64, io, zipfile
+          payload = """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"""
+          with zipfile.ZipFile(io.BytesIO(base64.b64decode(payload))) as archive:
+              archive.extractall('.')
+          PY
+          python3 LocationSpoofer-AMap-v2/apply_amap_v2.py --check
+          python3 LocationSpoofer-AMap-v2/apply_amap_v2.py
+
+      - name: Build signed scoped debug APKs
+        working-directory: project
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon :app:assembleScopedDebug --stacktrace
+
+      - name: Show installed package signing SHA1
+        run: |
+          if [ -f "$HOME/.android/debug.keystore" ]; then
+            keytool -list -v -keystore "$HOME/.android/debug.keystore" -alias androiddebugkey -storepass android -keypass android | grep -m1 SHA1 || true
+          fi
+          echo 'The new in-app AMap settings launcher also shows the exact certificate SHA1.'
+
+      - name: Upload installable test APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocationSpoofer-AMap-Scoped-Debug-APK
+          path: project/app/build/outputs/apk/scoped/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14

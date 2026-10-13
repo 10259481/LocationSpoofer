@@ -1,0 +1,229 @@
+name: LocationSpoofer 3.0.15 experimental AMap Key screen
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-key-screen:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Download verified v3.0.15 official APK and Apktool
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p work tools output
+          curl -fLsS --retry 4 --retry-delay 3 \
+            'https://github.com/HuangZhuoRui/LocationSpoofer/releases/download/v3.0.15/LocationSpoofer-v3.0.15-global-64bit-arm64-v8a.apk' \
+            -o work/original.apk
+          echo 'c2d06ab8164b57f11af2c8a5fc2c0e2312540305529529bfd95c4877dfb0105b  work/original.apk' | sha256sum -c -
+          curl -fLsS --retry 4 --retry-delay 3 \
+            'https://github.com/iBotPeaches/Apktool/releases/download/v2.12.1/apktool_2.12.1.jar' \
+            -o tools/apktool.jar
+          java -jar tools/apktool.jar d -f work/original.apk -o work/decoded
+
+      - name: Inject isolated AMap key settings Activity
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p tools
+          cat > tools/apply_stage9.py <<'PYTHON_PATCH'
+          #!/usr/bin/env python3
+          """Add a harmless, standalone AMap key configuration activity to decoded v3.0.15.
+          Does NOT replace MapLibre, bypass account restrictions or change Xposed modules.
+          """
+          import sys
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          import shutil
+          
+          if len(sys.argv) != 2:
+              sys.exit('Usage: python apply_stage9.py /path/to/apktool-decoded')
+          root = Path(sys.argv[1])
+          manifest = root / 'AndroidManifest.xml'
+          key_class = root / 'smali/com/vincenthzr/locationspoofer/LocalAmapKeyActivity.smali'
+          source = Path(__file__).with_name('LocalAmapKeyActivity.smali')
+          assert manifest.is_file() and source.is_file(), 'Missing manifest or source file'
+          orig = manifest.read_text(encoding='utf-8')
+          assert 'package="com.vincenthzr.locationspoofer"' in orig, 'Unexpected app package'
+          activity_name = 'com.vincenthzr.locationspoofer.LocalAmapKeyActivity'
+          if activity_name not in orig:
+              assert '</application>' in orig
+              entry = '''        <activity android:name="com.vincenthzr.locationspoofer.LocalAmapKeyActivity" android:exported="true" android:label="高德 Key 设置（测试）">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+          '''
+              modified = orig.replace('    </application>', entry + '    </application>', 1)
+              if modified == orig:
+                  sys.exit('Unable to locate application closing tag with expected indentation')
+              ET.fromstring(modified)
+              manifest.write_text(modified, encoding='utf-8')
+          key_class.parent.mkdir(parents=True, exist_ok=True)
+          shutil.copyfile(source, key_class)
+          assert key_class.read_text(encoding='utf-8').count('.method ') == 3
+          print('Patched', key_class)
+          print('This is a standalone KEY UI only; NOT an AMap engine integration.')
+          PYTHON_PATCH
+          cat > tools/LocalAmapKeyActivity.smali <<'SMALI_CONTENT'
+          .class public Lcom/vincenthzr/locationspoofer/LocalAmapKeyActivity;
+          .super Landroid/app/Activity;
+          .implements Landroid/view/View$OnClickListener;
+          
+          .field private keyInput:Landroid/widget/EditText;
+          
+          .method public constructor <init>()V
+              .locals 0
+              invoke-direct {p0}, Landroid/app/Activity;-><init>()V
+              return-void
+          .end method
+          
+          .method protected onCreate(Landroid/os/Bundle;)V
+              .locals 9
+              invoke-super {p0, p1}, Landroid/app/Activity;->onCreate(Landroid/os/Bundle;)V
+          
+              new-instance v0, Landroid/widget/LinearLayout;
+              invoke-direct {v0, p0}, Landroid/widget/LinearLayout;-><init>(Landroid/content/Context;)V
+              const/4 v1, 0x1
+              invoke-virtual {v0, v1}, Landroid/widget/LinearLayout;->setOrientation(I)V
+              const/16 v2, 0x20
+              invoke-virtual {v0, v2, v2, v2, v2}, Landroid/widget/LinearLayout;->setPadding(IIII)V
+          
+              new-instance v3, Landroid/widget/TextView;
+              invoke-direct {v3, p0}, Landroid/widget/TextView;-><init>(Landroid/content/Context;)V
+              const-string v4, "高德地图 Android SDK Key 设置"
+              invoke-virtual {v3, v4}, Landroid/widget/TextView;->setText(Ljava/lang/CharSequence;)V
+              invoke-virtual {v0, v3}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+          
+              new-instance v3, Landroid/widget/TextView;
+              invoke-direct {v3, p0}, Landroid/widget/TextView;-><init>(Landroid/content/Context;)V
+              const-string v4, "第九阶段测试：仅保存个人 Key，尚未将旧地图引擎替换为高德 SDK。切勿把当前版本当作完成版。"
+              invoke-virtual {v3, v4}, Landroid/widget/TextView;->setText(Ljava/lang/CharSequence;)V
+              invoke-virtual {v0, v3}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+          
+              new-instance v6, Landroid/widget/EditText;
+              invoke-direct {v6, p0}, Landroid/widget/EditText;-><init>(Landroid/content/Context;)V
+              const-string v4, "输入高德 Android SDK Key"
+              invoke-virtual {v6, v4}, Landroid/widget/EditText;->setHint(Ljava/lang/CharSequence;)V
+              iput-object v6, p0, Lcom/vincenthzr/locationspoofer/LocalAmapKeyActivity;->keyInput:Landroid/widget/EditText;
+          
+              const-string v7, "locationspoofer_amap_settings"
+              const/4 v8, 0x0
+              invoke-virtual {p0, v7, v8}, Landroid/app/Activity;->getSharedPreferences(Ljava/lang/String;I)Landroid/content/SharedPreferences;
+              move-result-object v7
+              const-string v4, "amap_api_key"
+              const-string v5, ""
+              invoke-interface {v7, v4, v5}, Landroid/content/SharedPreferences;->getString(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+              move-result-object v5
+              invoke-virtual {v6, v5}, Landroid/widget/EditText;->setText(Ljava/lang/CharSequence;)V
+              invoke-virtual {v0, v6}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+          
+              new-instance v6, Landroid/widget/Button;
+              invoke-direct {v6, p0}, Landroid/widget/Button;-><init>(Landroid/content/Context;)V
+              const-string v4, "保存 Key（测试版）"
+              invoke-virtual {v6, v4}, Landroid/widget/Button;->setText(Ljava/lang/CharSequence;)V
+              invoke-virtual {v6, p0}, Landroid/widget/Button;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+              invoke-virtual {v0, v6}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+              invoke-virtual {p0, v0}, Landroid/app/Activity;->setContentView(Landroid/view/View;)V
+              return-void
+          .end method
+          
+          .method public onClick(Landroid/view/View;)V
+              .locals 6
+              iget-object v0, p0, Lcom/vincenthzr/locationspoofer/LocalAmapKeyActivity;->keyInput:Landroid/widget/EditText;
+              invoke-virtual {v0}, Landroid/widget/EditText;->getText()Landroid/text/Editable;
+              move-result-object v0
+              invoke-virtual {v0}, Ljava/lang/Object;->toString()Ljava/lang/String;
+              move-result-object v0
+              invoke-virtual {v0}, Ljava/lang/String;->trim()Ljava/lang/String;
+              move-result-object v0
+          
+              const-string v1, "locationspoofer_amap_settings"
+              const/4 v2, 0x0
+              invoke-virtual {p0, v1, v2}, Landroid/app/Activity;->getSharedPreferences(Ljava/lang/String;I)Landroid/content/SharedPreferences;
+              move-result-object v3
+              invoke-interface {v3}, Landroid/content/SharedPreferences;->edit()Landroid/content/SharedPreferences$Editor;
+              move-result-object v3
+              const-string v4, "amap_api_key"
+              invoke-interface {v3, v4, v0}, Landroid/content/SharedPreferences$Editor;->putString(Ljava/lang/String;Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;
+              move-result-object v3
+              invoke-interface {v3}, Landroid/content/SharedPreferences$Editor;->apply()V
+          
+              const-string v0, "Key 已本地保存；当前地图尚未替换"
+              const/4 v1, 0x1
+              invoke-static {p0, v0, v1}, Landroid/widget/Toast;->makeText(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;
+              move-result-object v0
+              invoke-virtual {v0}, Landroid/widget/Toast;->show()V
+              return-void
+          .end method
+          SMALI_CONTENT
+          python3 tools/apply_stage9.py work/decoded
+          grep -q 'LocalAmapKeyActivity' work/decoded/AndroidManifest.xml
+          test -s work/decoded/smali/com/vincenthzr/locationspoofer/LocalAmapKeyActivity.smali
+
+      - name: Rebuild modified APK (not yet tested on phone)
+        shell: bash
+        run: |
+          set -euo pipefail
+          java -Xmx4g -jar tools/apktool.jar b work/decoded -o work/unsigned.apk
+          unzip -p work/original.apk 'lib/arm64-v8a/liblocation_accel.so' | sha256sum > work/original-sensor.sha256
+          unzip -p work/unsigned.apk 'lib/arm64-v8a/liblocation_accel.so' | sha256sum > work/test-sensor.sha256
+          cmp work/original-sensor.sha256 work/test-sensor.sha256
+          echo 'sensor_library_unchanged=yes' > output/build-checks.txt
+
+      - name: Restore stable test signing key
+        uses: actions/cache@v4
+        with:
+          path: .signing/debug.keystore
+          key: locationspoofer-315-stage9-debug-key-v1
+
+      - name: Align and sign TEST APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SIGNER="$(find "$SDK_DIR/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          ALIGN="$(find "$SDK_DIR/build-tools" -type f -name zipalign | sort -V | tail -n 1)"
+          test -x "$SIGNER" && test -x "$ALIGN"
+          mkdir -p .signing
+          if [ ! -s .signing/debug.keystore ]; then
+            keytool -genkeypair -keystore .signing/debug.keystore -storepass android \
+              -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 \
+              -validity 10000 -dname 'CN=Android Debug,O=Local Test,C=US'
+          fi
+          "$ALIGN" -f -p 4 work/unsigned.apk work/aligned.apk
+          "$SIGNER" sign --ks .signing/debug.keystore --ks-key-alias androiddebugkey \
+            --ks-pass pass:android --key-pass pass:android \
+            --out output/LocationSpoofer-315-AmapKeyScreen-TEST.apk work/aligned.apk
+          "$SIGNER" verify --verbose --print-certs output/LocationSpoofer-315-AmapKeyScreen-TEST.apk | tee output/signature-info.txt
+          keytool -list -keystore .signing/debug.keystore -storepass android \
+            -alias androiddebugkey -v | grep SHA1 | tee -a output/signature-info.txt
+          unzip -t output/LocationSpoofer-315-AmapKeyScreen-TEST.apk >/dev/null
+          cat > output/READ_ME_FIRST.txt <<'WARNING'
+          Experimental test: Only a standalone key entry UI is added to official v3.0.15.
+          It does NOT replace MapLibre or remove account restrictions.
+          This test APK has a different signing certificate from official v3.0.15.
+          Back up data before attempting installation. It cannot update official install directly.
+          Do not delete the old app without a verified backup. No device runtime test performed.
+          Use SHA1 in signature-info.txt to register Android SDK Key, once engine integration exists.
+          WARNING
+
+      - name: Upload experimental test APK and signing fingerprint
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: locationspoofer-315-AMap-key-screen-TEST
+          path: output/
+          if-no-files-found: warn
+          retention-days: 7
